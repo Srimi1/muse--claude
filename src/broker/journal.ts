@@ -39,12 +39,13 @@ export class Journal {
         deadline_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS participants (
-        session_id TEXT PRIMARY KEY,
+        session_id TEXT,
         room_id TEXT,
         name TEXT,
         harness TEXT,
         joined_at INTEGER,
-        connected INTEGER
+        connected INTEGER,
+        PRIMARY KEY (room_id, session_id)
       );
       CREATE TABLE IF NOT EXISTS messages (
         seq INTEGER,
@@ -92,8 +93,8 @@ export class Journal {
     if (!this.db) throw new Error('Database not initialized');
     const now = Date.now();
     this.db.run(
-      'INSERT INTO rooms (id, state, current_stage, task, repo_root, created_at, deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, 'created', null, null, null, now, deadlineAt]
+      'INSERT OR REPLACE INTO rooms (id, state, current_stage, task, repo_root, created_at, deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, RoomState.WAITING, null, null, null, now, deadlineAt]
     );
     this.save();
     return this.getRoom(id) as Room;
@@ -193,7 +194,7 @@ export class Journal {
   addParticipant(roomId: string, p: Omit<Participant, 'connected'>): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      'INSERT INTO participants (session_id, room_id, name, harness, joined_at, connected) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT OR REPLACE INTO participants (session_id, room_id, name, harness, joined_at, connected) VALUES (?, ?, ?, ?, ?, ?)',
       [p.sessionId, roomId, p.name, p.harness, p.joinedAt, 1]
     );
     this.save();

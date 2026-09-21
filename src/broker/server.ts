@@ -109,8 +109,16 @@ export class BrokerServer {
 
   private async handleRequest(socket: net.Socket, request: JsonRpcRequest): Promise<void> {
     try {
-      const sessionId = this.getSessionId(socket);
+      const clientSessionId = this.getSessionId(socket);
       const p = request.params as Record<string, any>;
+      let sessionId = clientSessionId ?? p?.sessionId;
+      if (!sessionId && p?.room) {
+        try {
+          sessionId = this.roomManager.getStatus(p.room).room.participants[0]?.sessionId;
+        } catch {
+          // Room might not exist yet
+        }
+      }
 
       switch (request.method) {
         case 'join': {
