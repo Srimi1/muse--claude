@@ -18,6 +18,16 @@ A hybrid coding agent harness that enables **Claude Code** to be driven by **Met
 - **MCP Stdio Adapter**: Exposes `/talk` capabilities directly to both Claude Code and Muse Code as native agent tools (`talk_join`, `talk_send`, `talk_receive`, `talk_status`, `talk_stop`).
 - **Safeguards**: Max 6 messages, 8 KiB size limits, 30-minute deadline, session isolation, and worktree isolation. Peer messages cannot execute tools or bypass permissions.
 
+### Broker durability
+
+Room state, participants and messages are written to the SQLite journal as the
+exchange progresses, and the broker rebuilds its in-memory rooms from that
+journal on startup. Restarting `claude-muse talk broker` therefore resumes an
+exchange at the stage it had reached rather than orphaning the room. A room
+whose 30-minute deadline lapsed while the broker was down is restored as
+`CANCELLED`. The broker shuts down on `SIGINT`/`SIGTERM`, releasing its
+deadline timers and removing its socket.
+
 ---
 
 ## Quick Start
@@ -81,6 +91,8 @@ npm run test:broker     # Broker room lifecycle & SQLite journal
 npm run test:protocol   # Wire protocol & NDJSON parsing
 npm run test:mcp        # MCP tools schemas
 npm run test:e2e        # End-to-end two-terminal collaboration simulation
+npm run test:regression # Journal persistence, broker restart & shutdown
+npm run test:security   # Credential and git-argument handling
 ```
 
 ---

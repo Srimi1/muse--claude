@@ -5,7 +5,7 @@
  * @module git/worktree
  */
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { CONFIG_DIR } from '../config/constants.js';
@@ -16,13 +16,36 @@ export interface WorktreeInfo {
   baseCommit: string;
 }
 
+/** Extra environment needed to reach a working git, if any. */
+type GitEnv = Record<string, string> | undefined;
+
+/**
+ * Reduces a caller-supplied identifier to characters that are safe in a git
+ * ref and a filesystem path. Room names and participant names both arrive
+ * from user input, so neither is trusted.
+ */
+function sanitizeSegment(value: string): string {
+  const cleaned = value.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return cleaned.length > 0 ? cleaned : 'unnamed';
+}
+
+/** Runs a git command with arguments passed as argv, never through a shell. */
+function git(args: string[], cwd: string, env: GitEnv): string {
+  return execFileSync('git', args, {
+    cwd,
+    stdio: 'pipe',
+    encoding: 'utf-8',
+    env: env ? { ...process.env, ...env } : process.env,
+  });
+}
+
 /**
  * Checks if git is operational and not blocked by Xcode license agreements.
  * @returns { operational: boolean; licenseBlocked: boolean; message?: string }
  */
 export function checkGitStatus(): { operational: boolean; licenseBlocked: boolean; env?: Record<string, string>; message?: string } {
   try {
-    execSync('git --version', { stdio: 'pipe' });
+    execFileSync('git', ['--version'], { stdio: 'pipe' });
     return { operational: true, licenseBlocked: false };
   } catch (err: any) {
     const output = String(err.stderr || err.stdout || err.message);
@@ -30,7 +53,7 @@ export function checkGitStatus(): { operational: boolean; licenseBlocked: boolea
       // Check if Apple CommandLineTools is available as an unblocked alternative
       if (fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/git')) {
         try {
-          execSync('git --version', {
+          execFileSync('git', ['--version'], {
             stdio: 'pipe',
             env: { ...process.env, DEVELOPER_DIR: '/Library/Developer/CommandLineTools' },
           });
@@ -74,42 +97,43 @@ export function createParticipantWorktree(
   if (!gitCheck.operational) {
     throw new Error(gitCheck.message || 'Git is not operational');
   }
+  // checkGitStatus may have found git only via DEVELOPER_DIR; every git call
+  // below has to run with that same environment or it will fail again.
+  const env = gitCheck.env;
 
-  // Sanitize participant name for branch and path
-  const sanitizedName = participantName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const worktreeDir = path.join(CONFIG_DIR, 'worktrees', roomId, sanitizedName);
-  const branch = `talk/${roomId}/${sanitizedName}`;
+  // Sanitize both segments for branch and path
+  const sanitizedRoom = sanitizeSegment(roomId);
+  const sanitizedName = sanitizeSegment(participantName);
+  const worktreeDir = path.join(CONFIG_DIR, 'worktrees', sanitizedRoom, sanitizedName);
+  const branch = `talk/${sanitizedRoom}/${sanitizedName}`;
 
   if (fs.existsSync(worktreeDir)) {
     // Worktree directory already exists
     return {
       worktreePath: worktreeDir,
       branch,
-      baseCommit: getCurrentCommit(repoRoot),
+      baseCommit: getCurrentCommit(repoRoot, env),
     };
   }
 
   fs.mkdirSync(path.dirname(worktreeDir), { recursive: true });
 
-  const baseCommit = getCurrentCommit(repoRoot);
+  const baseCommit = getCurrentCommit(repoRoot, env);
 
   try {
     // Check if branch exists
     let branchExists = false;
     try {
-      execSync(`git rev-parse --verify refs/heads/${branch}`, { cwd: repoRoot, stdio: 'pipe' });
+      git(['rev-parse', '--verify', `refs/heads/${branch}`], repoRoot, env);
       branchExists = true;
     } catch {
       branchExists = false;
     }
 
     if (branchExists) {
-      execSync(`git worktree add "${worktreeDir}" "${branch}"`, { cwd: repoRoot, stdio: 'pipe' });
+      git(['worktree', 'add', worktreeDir, branch], repoRoot, env);
     } else {
-      execSync(`git worktree add -b "${branch}" "${worktreeDir}" "${baseCommit}"`, {
-        cwd: repoRoot,
-        stdio: 'pipe',
-      });
+      git(['worktree', 'add', '-b', branch, worktreeDir, baseCommit], repoRoot, env);
     }
 
     return {
@@ -138,17 +162,19 @@ export function removeParticipantWorktree(
 ): void {
   const gitCheck = checkGitStatus();
   if (!gitCheck.operational) return;
+  const env = gitCheck.env;
 
-  const sanitizedName = participantName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const worktreeDir = path.join(CONFIG_DIR, 'worktrees', roomId, sanitizedName);
-  const branch = `talk/${roomId}/${sanitizedName}`;
+  const sanitizedRoom = sanitizeSegment(roomId);
+  const sanitizedName = sanitizeSegment(participantName);
+  const worktreeDir = path.join(CONFIG_DIR, 'worktrees', sanitizedRoom, sanitizedName);
+  const branch = `talk/${sanitizedRoom}/${sanitizedName}`;
 
   try {
     if (fs.existsSync(worktreeDir)) {
-      execSync(`git worktree remove --force "${worktreeDir}"`, { cwd: repoRoot, stdio: 'pipe' });
+      git(['worktree', 'remove', '--force', worktreeDir], repoRoot, env);
     }
     if (deleteBranch) {
-      execSync(`git branch -D "${branch}"`, { cwd: repoRoot, stdio: 'pipe' });
+      git(['branch', '-D', branch], repoRoot, env);
     }
   } catch {
     // Best-effort cleanup
@@ -158,9 +184,9 @@ export function removeParticipantWorktree(
 /**
  * Gets the current HEAD commit hash of a git repository.
  */
-function getCurrentCommit(repoRoot: string): string {
+function getCurrentCommit(repoRoot: string, env?: GitEnv): string {
   try {
-    return execSync('git rev-parse HEAD', { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
+    return git(['rev-parse', 'HEAD'], repoRoot, env).trim();
   } catch {
     return 'HEAD';
   }

@@ -92,8 +92,10 @@ export class Journal {
   createRoom(id: string, deadlineAt: number): Room {
     if (!this.db) throw new Error('Database not initialized');
     const now = Date.now();
+    // OR IGNORE, not OR REPLACE: a room that already exists in the journal keeps
+    // its state, task and deadline instead of being silently reset.
     this.db.run(
-      'INSERT OR REPLACE INTO rooms (id, state, current_stage, task, repo_root, created_at, deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT OR IGNORE INTO rooms (id, state, current_stage, task, repo_root, created_at, deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [id, RoomState.WAITING, null, null, null, now, deadlineAt]
     );
     this.save();
@@ -223,11 +225,25 @@ export class Journal {
   }
 
   /**
-   * Sets a participant's connected status.
+   * Sets a participant's connected status within a single room.
+   * Scoped by room because the same session id may appear in several rooms.
    */
-  setParticipantConnected(sessionId: string, connected: boolean): void {
+  setParticipantConnected(roomId: string, sessionId: string, connected: boolean): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('UPDATE participants SET connected = ? WHERE session_id = ?', [connected ? 1 : 0, sessionId]);
+    this.db.run(
+      'UPDATE participants SET connected = ? WHERE room_id = ? AND session_id = ?',
+      [connected ? 1 : 0, roomId, sessionId]
+    );
+    this.save();
+  }
+
+  /**
+   * Marks every participant of a room as disconnected.
+   * Used on broker startup, since no client holds a socket across a restart.
+   */
+  setAllParticipantsDisconnected(roomId: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('UPDATE participants SET connected = 0 WHERE room_id = ?', [roomId]);
     this.save();
   }
 
@@ -294,7 +310,8 @@ export class Journal {
         senderName: row.sender_name as string,
         stage: row.stage as ExchangeStage,
         content: row.content as string,
-        timestamp: row.timestamp as string
+        timestamp: row.timestamp as string,
+        acknowledged: (row.acknowledged as number) === 1
       } as ExchangeMessage);
     }
     stmt.free();

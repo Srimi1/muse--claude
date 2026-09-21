@@ -6,38 +6,66 @@ import { doctorCommand } from './commands/doctor.js';
 import { launchCommand } from './commands/launch.js';
 import { startBroker } from './broker/server.js';
 import net from 'net';
-import { SOCKET_PATH } from './config/constants.js';
+import { SOCKET_PATH, MAX_EXCHANGE_MESSAGES } from './config/constants.js';
+import { shouldDefaultToLaunch } from './cli-args.js';
+
+/** How long a single CLI request waits for the broker before giving up. */
+const BROKER_REQUEST_TIMEOUT_MS = 35_000;
 
 /**
  * Sends a JSON-RPC request to the broker and returns the result.
+ *
+ * The promise always settles: a broker that accepts the connection and then
+ * goes away, or never answers, produces an error instead of hanging the CLI.
  */
 async function brokerRequest(method: string, params: Record<string, unknown>): Promise<any> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const finish = (err: Error | null, result?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (err) reject(err);
+      else resolve(result);
+    };
+
     const socket = net.createConnection(SOCKET_PATH, () => {
       const request = { jsonrpc: '2.0', id: 1, method, params };
       socket.write(JSON.stringify(request) + '\n');
     });
 
+    const timer = setTimeout(
+      () => finish(new Error(`Timed out after ${BROKER_REQUEST_TIMEOUT_MS / 1000}s waiting for the broker.`)),
+      BROKER_REQUEST_TIMEOUT_MS
+    );
+
     let buffer = '';
     socket.on('data', (data) => {
       buffer += data.toString();
       const lines = buffer.split('\n');
+      // The final element is either empty or a partial line; keep it buffered.
+      buffer = lines.pop() ?? '';
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const response = JSON.parse(line);
-          socket.destroy();
-          if (response.error) {
-            reject(new Error(response.error.message));
-          } else {
-            resolve(response.result);
-          }
-        } catch { /* wait for more data */ }
+          if (response.error) finish(new Error(response.error.message));
+          else finish(null, response.result);
+          return;
+        } catch {
+          // Not valid JSON: skip this line and keep reading.
+        }
       }
     });
 
+    socket.on('close', () => {
+      finish(new Error('Broker closed the connection before responding.'));
+    });
+
     socket.on('error', (err) => {
-      reject(new Error(`Cannot connect to broker. Is it running?\n  Start it with: claude-muse talk broker\n  Error: ${err.message}`));
+      finish(new Error(`Cannot connect to broker. Is it running?\n  Start it with: claude-muse talk broker\n  Error: ${err.message}`));
     });
   });
 }
@@ -93,10 +121,15 @@ export function runCli() {
     .command('join')
     .argument('<room>', 'Room name')
     .argument('<name>', 'Your display name')
+    .option('--harness <harness>', "Which CLI you are joining from: 'claude' or 'muse'", 'claude')
     .description('Join a talk room')
-    .action(async (room: string, name: string) => {
+    .action(async (room: string, name: string, options: { harness: string }) => {
       try {
-        const result = await brokerRequest('join', { room, name, harness: 'claude' });
+        if (options.harness !== 'claude' && options.harness !== 'muse') {
+          console.error(`Unknown harness '${options.harness}'. Expected 'claude' or 'muse'.`);
+          process.exit(1);
+        }
+        const result = await brokerRequest('join', { room, name, harness: options.harness });
         if (result.waitingForPeer) {
           console.log(`Joined room '${room}' as '${name}'. Waiting for peer...`);
         } else {
@@ -134,7 +167,7 @@ export function runCli() {
         console.log(`Room: ${r.id}`);
         console.log(`State: ${r.state}`);
         console.log(`Stage: ${r.currentStage ?? 'N/A'}`);
-        console.log(`Messages: ${r.messageCount}/${6}`);
+        console.log(`Messages: ${r.messageCount}/${MAX_EXCHANGE_MESSAGES}`);
         console.log(`Participants:`);
         for (const p of r.participants) {
           const conn = p.connected ? '●' : '○';
@@ -185,12 +218,10 @@ export function runCli() {
       }
     });
 
-  // Default to launch if no subcommand
-  const args = process.argv.slice(2);
-  const subcommands = ['setup', 'models', 'doctor', 'launch', 'talk', 'help'];
-  const hasSubcommand = args.length > 0 && !args[0].startsWith('-') && subcommands.includes(args[0]);
-
-  if (!hasSubcommand && !args.includes('--help') && !args.includes('-h') && !args.includes('--version') && !args.includes('-V')) {
+  // `claude-muse` and `claude-muse --model x` mean `claude-muse launch [...]`.
+  // Anything else is left alone so commander can report an unknown command
+  // rather than forwarding it to launch as a stray positional argument.
+  if (shouldDefaultToLaunch(process.argv.slice(2))) {
     process.argv.splice(2, 0, 'launch');
   }
 

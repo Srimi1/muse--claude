@@ -51,12 +51,18 @@ export class RoomManager {
     if (existing) {
       // Reconnect
       existing.connected = true;
-      this.journal.setParticipantConnected(sessionId, true);
+      this.journal.setParticipantConnected(roomId, sessionId, true);
       return { room, waitingForPeer: room.state === RoomState.WAITING };
     }
 
     if (room.participants.length >= 2) {
       throw new Error(BrokerError.ROOM_FULL);
+    }
+
+    // Verify repo identity before the participant is recorded, so a rejected
+    // join leaves nothing behind in memory or in the journal.
+    if (repoRoot && room.repoRoot && room.repoRoot !== repoRoot) {
+      throw new Error('Repository mismatch between participants');
     }
 
     const participant: Participant = {
@@ -69,12 +75,7 @@ export class RoomManager {
     room.participants.push(participant);
     this.journal.addParticipant(roomId, participant);
 
-    // Verify repo identity if both participants provide it
     if (repoRoot) {
-      if (room.repoRoot && room.repoRoot !== repoRoot) {
-        room.participants.pop();
-        throw new Error('Repository mismatch between participants');
-      }
       room.repoRoot = repoRoot;
       this.journal.setRoomRepoRoot(roomId, repoRoot);
     }
@@ -173,15 +174,60 @@ export class RoomManager {
     if (!this.isParticipant(roomId, sessionId)) throw new Error(BrokerError.NOT_PARTICIPANT);
 
     room.state = RoomState.CANCELLED;
+    this.journal.updateRoomState(roomId, room.state, room.currentStage);
     this.cancelDeadlineTimer(roomId);
   }
 
-  /** Marks a participant as disconnected. */
+  /** Marks a participant as disconnected, in memory and in the journal. */
   handleDisconnect(sessionId: string): void {
     for (const room of this.rooms.values()) {
       const p = room.participants.find((p) => p.sessionId === sessionId);
-      if (p) p.connected = false;
+      if (p) {
+        p.connected = false;
+        this.journal.setParticipantConnected(room.id, sessionId, false);
+      }
     }
+  }
+
+  /**
+   * Rebuilds in-memory room state from the journal.
+   * Called once when the broker starts so that rooms, participants and
+   * messages written by a previous run remain addressable.
+   */
+  restore(): void {
+    const now = Date.now();
+
+    for (const room of this.journal.listRooms()) {
+      // No client holds a socket across a restart.
+      for (const p of room.participants) p.connected = false;
+      this.journal.setAllParticipantsDisconnected(room.id);
+
+      const finished = room.state === RoomState.DONE || room.state === RoomState.CANCELLED;
+      if (!finished && room.deadlineAt <= now) {
+        room.state = RoomState.CANCELLED;
+        this.journal.updateRoomState(room.id, room.state, room.currentStage);
+      }
+
+      this.rooms.set(room.id, room);
+
+      if (room.state === RoomState.ACTIVE ||
+          room.state === RoomState.EXCHANGING ||
+          room.state === RoomState.REVIEWING) {
+        this.startDeadlineTimer(room.id);
+      }
+    }
+  }
+
+  /**
+   * Releases every pending deadline timer.
+   * Without this the 30-minute timers keep the Node event loop alive and the
+   * broker process refuses to exit after its socket has been closed.
+   */
+  shutdown(): void {
+    for (const timer of this.deadlineTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.deadlineTimers.clear();
   }
 
   /** Gets the transcript entries for a room. */
@@ -237,6 +283,7 @@ export class RoomManager {
       const r = this.rooms.get(roomId);
       if (r && r.state !== RoomState.DONE && r.state !== RoomState.CANCELLED) {
         r.state = RoomState.CANCELLED;
+        this.journal.updateRoomState(roomId, r.state, r.currentStage);
       }
       this.deadlineTimers.delete(roomId);
     }, timeout);
@@ -268,5 +315,9 @@ export class RoomManager {
       room.state = RoomState.DONE;
       this.cancelDeadlineTimer(roomId);
     }
+
+    // Persist the transition; otherwise the journal keeps reporting the stage
+    // that startExchange wrote and a restart resumes from the wrong point.
+    this.journal.updateRoomState(roomId, room.state, room.currentStage);
   }
 }
