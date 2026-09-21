@@ -1,1 +1,91 @@
-# muse--claude
+# Muse Spark in Claude Code + Cross-Terminal `/talk`
+
+A hybrid coding agent harness that enables **Claude Code** to be driven by **Meta Model API** (Muse Spark models) alongside native **Muse Code**, with a cross-terminal structured exchange bridge (`/talk`).
+
+---
+
+## Architecture
+
+- **`claude-muse`**: Drop-in launcher wrapping Claude Code with Meta Model API credentials stored securely in macOS Keychain.
+- **`/talk` Broker**: Local Unix-domain socket server with a WASM SQLite message journal (`sql.js`).
+- **6-Stage Collaboration Protocol**:
+  1. `PROPOSAL`
+  2. `CRITIQUE_OWNERSHIP`
+  3. `IMPLEMENTATION_A`
+  4. `IMPLEMENTATION_B`
+  5. `REVIEW`
+  6. `SYNTHESIS`
+- **MCP Stdio Adapter**: Exposes `/talk` capabilities directly to both Claude Code and Muse Code as native agent tools (`talk_join`, `talk_send`, `talk_receive`, `talk_status`, `talk_stop`).
+- **Safeguards**: Max 6 messages, 8 KiB size limits, 30-minute deadline, session isolation, and worktree isolation. Peer messages cannot execute tools or bypass permissions.
+
+---
+
+## Quick Start
+
+### 1. Install & Build
+```bash
+./scripts/install.sh
+```
+
+### 2. Configure Credentials
+```bash
+claude-muse setup
+```
+
+### 3. Verify Setup
+```bash
+claude-muse doctor
+```
+
+### 4. Launch Claude Code with Muse Spark
+```bash
+claude-muse launch
+# or specify model:
+claude-muse launch --model muse-spark-1.3
+```
+
+### 5. Cross-Terminal `/talk` Collaboration
+In terminal 1:
+```bash
+claude-muse talk broker
+```
+
+In Claude Code session:
+```
+/talk join feature-x claude-dev
+```
+
+In Muse Code session:
+```
+/talk join feature-x muse-dev
+```
+
+Initiate task from either terminal:
+```
+/talk start feature-x "Implement user authentication with JWT"
+```
+
+---
+
+## Testing
+
+Run the full automated test suite:
+```bash
+npm test
+```
+
+Run specific test suites:
+```bash
+npm run test:api        # Meta API client & model resolution
+npm run test:broker     # Broker room lifecycle & SQLite journal
+npm run test:protocol   # Wire protocol & NDJSON parsing
+npm run test:mcp        # MCP tools schemas
+npm run test:e2e        # End-to-end two-terminal collaboration simulation
+```
+
+---
+
+## Documentation
+
+- [Setup & Operations Guide](docs/setup-guide.md)
+- [Uninstallation Guide](docs/uninstall.md)

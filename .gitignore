@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+
+# Runtime files
+*.sock
+*.db
+*.log
+.claude-muse/
+
+# OS metadata
+.DS_Store
+Thumbs.db
