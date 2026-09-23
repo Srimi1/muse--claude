@@ -149,4 +149,98 @@ describe('Broker RoomManager & SQLite Journal', () => {
     expect(transcript[0].senderName).toBe('Alice');
     expect(transcript[1].senderName).toBe('Bob');
   });
+
+  it('includes the acknowledged flag on messages and clears it on ack', () => {
+    roomManager.joinRoom('ack-room', 's1', 'Alice', 'claude');
+    roomManager.joinRoom('ack-room', 's2', 'Bob', 'muse');
+    roomManager.startExchange('ack-room', 's1', 'Task');
+
+    const msg = roomManager.sendMessage('ack-room', 's1', 'Hello');
+    expect(msg.acknowledged).toBe(false);
+
+    const received = roomManager.receiveMessages('ack-room', 's2');
+    expect(received.length).toBe(1);
+    expect(received[0].acknowledged).toBe(false);
+    expect(roomManager.getStatus('ack-room').unackedBySession['s2']).toBe(1);
+
+    roomManager.acknowledgeMessage('ack-room', 's2', msg.seq);
+    expect(roomManager.receiveMessages('ack-room', 's2')[0].acknowledged).toBe(true);
+    expect(roomManager.getStatus('ack-room').unackedBySession['s2']).toBe(0);
+  });
+
+  it('persists room state and stage to the journal on every transition', () => {
+    roomManager.joinRoom('persist-room', 's1', 'Alice', 'claude');
+    roomManager.joinRoom('persist-room', 's2', 'Bob', 'muse');
+    expect(journal.getRoom('persist-room')?.state).toBe(RoomState.ACTIVE);
+
+    roomManager.startExchange('persist-room', 's1', 'Task');
+    expect(journal.getRoom('persist-room')?.state).toBe(RoomState.EXCHANGING);
+    expect(journal.getRoom('persist-room')?.currentStage).toBe(ExchangeStage.PROPOSAL);
+
+    roomManager.sendMessage('persist-room', 's1', 'M1');
+    roomManager.sendMessage('persist-room', 's2', 'M2');
+    roomManager.sendMessage('persist-room', 's1', 'M3');
+    roomManager.sendMessage('persist-room', 's2', 'M4');
+    roomManager.sendMessage('persist-room', 's1', 'M5');
+    const journalMid = journal.getRoom('persist-room');
+    expect(journalMid?.state).toBe(RoomState.REVIEWING);
+    expect(journalMid?.currentStage).toBe(ExchangeStage.REVIEW);
+
+    roomManager.sendMessage('persist-room', 's2', 'M6');
+    const journalDone = journal.getRoom('persist-room');
+    expect(journalDone?.state).toBe(RoomState.DONE);
+    expect(journalDone?.currentStage).toBe(ExchangeStage.SYNTHESIS);
+
+    roomManager.joinRoom('stop-persist-room', 's1', 'Alice', 'claude');
+    roomManager.stopRoom('stop-persist-room', 's1');
+    expect(journal.getRoom('stop-persist-room')?.state).toBe(RoomState.CANCELLED);
+  });
+
+  it('leaves memory and journal untouched when repo roots mismatch', () => {
+    roomManager.joinRoom('repo-room', 's1', 'Alice', 'claude', '/repo/a');
+    expect(() => {
+      roomManager.joinRoom('repo-room', 's2', 'Bob', 'muse', '/repo/b');
+    }).toThrow('Repository mismatch');
+
+    const status = roomManager.getStatus('repo-room');
+    expect(status.room.participants.length).toBe(1);
+    expect(status.room.repoRoot).toBe('/repo/a');
+    expect(journal.getParticipants('repo-room').length).toBe(1);
+    expect(journal.getRoom('repo-room')?.repoRoot).toBe('/repo/a');
+  });
+
+  it('persists participant disconnects to the journal', () => {
+    roomManager.joinRoom('disc-room', 's1', 'Alice', 'claude');
+    roomManager.handleDisconnect('s1');
+
+    expect(roomManager.getStatus('disc-room').room.participants[0].connected).toBe(false);
+    expect(journal.getParticipants('disc-room')[0].connected).toBe(false);
+  });
+
+  it('preserves the existing journal row when a room is re-created', () => {
+    journal.createRoom('re-room', Date.now() + 1000);
+    journal.setRoomTask('re-room', 'Original task');
+    journal.updateRoomState('re-room', RoomState.EXCHANGING, ExchangeStage.REVIEW);
+
+    journal.createRoom('re-room', Date.now() + 2000);
+    const room = journal.getRoom('re-room');
+    expect(room?.task).toBe('Original task');
+    expect(room?.state).toBe(RoomState.EXCHANGING);
+    expect(room?.currentStage).toBe(ExchangeStage.REVIEW);
+  });
+
+  it('attributes transcript harness per room when a session joins two rooms', () => {
+    roomManager.joinRoom('room-a', 'shared-session', 'Agent', 'claude');
+    roomManager.joinRoom('room-a', 'other-a', 'PeerA', 'muse');
+    roomManager.joinRoom('room-b', 'shared-session', 'Agent', 'muse');
+    roomManager.joinRoom('room-b', 'other-b', 'PeerB', 'claude');
+    roomManager.startExchange('room-a', 'shared-session', 'Task A');
+    roomManager.startExchange('room-b', 'shared-session', 'Task B');
+
+    roomManager.sendMessage('room-a', 'shared-session', 'From room A');
+    roomManager.sendMessage('room-b', 'shared-session', 'From room B');
+
+    expect(roomManager.getTranscript('room-a')[0].harness).toBe('claude');
+    expect(roomManager.getTranscript('room-b')[0].harness).toBe('muse');
+  });
 });

@@ -7,7 +7,7 @@ This document outlines how to cleanly and completely remove `claude-muse`, its c
 ## Complete Removal Steps
 
 ### Step 1: Remove Meta API Key from macOS Keychain
-Run the following command to delete the stored API key:
+If you set up `claude-muse` with an API key, run the following command to delete the stored key (skip this if you only used the Muse Code subscription or Muse's stored key; `claude-muse` never copies those):
 
 ```bash
 security delete-generic-password -s com.claude-muse.meta-api-key -a claude-muse
@@ -43,6 +43,11 @@ rm -f ~/.claude/skills/talk.md
 ```bash
 rm -f ~/.muse/skills/talk.md
 ```
+
+---
+
+> [!NOTE]
+> Removing `claude-muse` never touches Muse's own login (Keychain entry `ai.meta.dev.credentials` and `~/.config/muse/auth.json`), so Muse Code stays signed in.
 
 ---
 

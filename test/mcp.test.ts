@@ -32,6 +32,7 @@ describe('MCP Tools Schema & Definitions', () => {
     expect(tool).toBeDefined();
     expect(tool?.inputSchema.required).toEqual(['room']);
     expect(tool?.inputSchema.properties.afterSeq).toBeDefined();
+    expect(tool?.inputSchema.properties.afterSeq.type).toBe('number');
   });
 
   it('validates schema for talk_status and talk_stop', () => {

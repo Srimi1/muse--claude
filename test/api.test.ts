@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { MetaClient } from '../src/api/meta-client.js';
+import { MetaClient, createMetaClient } from '../src/api/meta-client.js';
 import { resolveAliases, validateModel, getContributorWarning } from '../src/api/model-resolver.js';
 import { startMockMetaServer, type MockServerInfo } from './fixtures/mock-meta-api.js';
 
@@ -74,5 +74,47 @@ describe('MetaClient & Model Resolver', () => {
     const warning = getContributorWarning();
     expect(warning.toLowerCase()).toContain('contributor');
     expect(warning.toLowerCase()).toContain('training');
+  });
+});
+
+describe('MetaClient extra headers', () => {
+  let mockServer: MockServerInfo;
+
+  beforeAll(async () => {
+    mockServer = await startMockMetaServer({ requiredHeaders: { 'x-test-client': 'muse' } });
+  });
+
+  afterAll(async () => {
+    await mockServer.close();
+  });
+
+  it('sends extra headers on every request', async () => {
+    const client = new MetaClient('token', mockServer.baseUrl, { 'x-test-client': 'muse' });
+    expect(await client.testAuth()).toBe(true);
+    expect((await client.testStreaming()).success).toBe(true);
+  });
+
+  it('fails when an endpoint needs headers the client does not send', async () => {
+    const client = new MetaClient('token', mockServer.baseUrl);
+    expect(await client.testAuth()).toBe(false);
+  });
+});
+
+describe('createMetaClient', () => {
+  let mockServer: MockServerInfo;
+
+  beforeAll(async () => {
+    mockServer = await startMockMetaServer();
+  });
+
+  afterAll(async () => {
+    await mockServer.close();
+  });
+
+  it('builds a working client for either credential kind', async () => {
+    for (const kind of ['api-key', 'oauth'] as const) {
+      const client = createMetaClient({ kind, token: 'token' }, mockServer.baseUrl);
+      expect(await client.testAuth()).toBe(true);
+    }
   });
 });

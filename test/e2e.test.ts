@@ -183,4 +183,94 @@ describe('End-to-End Two-Terminal /talk Simulation', () => {
     client1.close();
     client2.close();
   });
+
+  it('rejects malformed requests with clear param errors', async () => {
+    const client = await createClient();
+
+    await expect(client.call('join', { room: 'bad-room' })).rejects.toThrow("Invalid param 'name'");
+    await expect(
+      client.call('join', { room: 'bad-room', name: 'x', harness: 'gpt' })
+    ).rejects.toThrow('Invalid harness');
+    await expect(client.call('start', { room: 'feature-auth' })).rejects.toThrow(
+      "Invalid param 'task'"
+    );
+    await expect(client.call('send', { room: 'feature-auth', content: '' })).rejects.toThrow(
+      "Invalid param 'content'"
+    );
+    await expect(client.call('ack', { room: 'feature-auth' })).rejects.toThrow(
+      "Invalid param 'seq'"
+    );
+    await expect(client.call('status', {})).rejects.toThrow("Invalid param 'room'");
+
+    client.close();
+  });
+});
+
+describe('Broker shutdown with pending long-poll', () => {
+  it('stops cleanly without unhandled errors', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'talk-e2e-stop-'));
+    const socketPath = path.join(tempDir, 'talk-stop.sock');
+    const dbPath = path.join(tempDir, 'journal-stop.db');
+    const server = new BrokerServer(socketPath, dbPath);
+    await server.start();
+
+    const socket: net.Socket = await new Promise((resolve, reject) => {
+      const s = net.createConnection(socketPath, () => resolve(s));
+      s.on('error', reject);
+    });
+    let reqId = 0;
+    let buffer = '';
+    const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+    socket.on('data', (data) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const res = JSON.parse(line);
+          const p = pending.get(res.id);
+          if (p) {
+            pending.delete(res.id);
+            if (res.error) p.reject(new Error(res.error.message));
+            else p.resolve(res.result);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    });
+    const call = (method: string, params: Record<string, unknown>): Promise<any> => {
+      const id = ++reqId;
+      return new Promise((res, rej) => {
+        pending.set(id, { resolve: res, reject: rej });
+        socket.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      });
+    };
+
+    await call('join', { room: 'stop-room', name: 'a', sessionId: 'sa', harness: 'claude' });
+    await call('join', { room: 'stop-room', name: 'b', sessionId: 'sb', harness: 'muse' });
+    await call('start', { room: 'stop-room', sessionId: 'sa', task: 'Shutdown test' });
+
+    // Fire a long-poll receive and let it schedule follow-up polls
+    const receivePromise = call('receive', { room: 'stop-room', sessionId: 'sb', timeoutMs: 30000 });
+    receivePromise.catch(() => {});
+    await new Promise((r) => setTimeout(r, 500));
+
+    const errors: unknown[] = [];
+    const onUncaught = (err: unknown) => errors.push(err);
+    process.on('uncaughtException', onUncaught);
+    try {
+      await server.stop();
+      // Give any leaked poll timer a chance to fire against the closed journal
+      await new Promise((r) => setTimeout(r, 600));
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+
+    expect(errors).toEqual([]);
+
+    socket.destroy();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
 });

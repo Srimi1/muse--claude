@@ -1,73 +1,22 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { setupCommand } from './commands/setup.js';
 import { modelsCommand } from './commands/models.js';
 import { doctorCommand } from './commands/doctor.js';
 import { launchCommand } from './commands/launch.js';
 import { startBroker } from './broker/server.js';
-import net from 'net';
-import { SOCKET_PATH, MAX_EXCHANGE_MESSAGES } from './config/constants.js';
+import { MAX_EXCHANGE_MESSAGES } from './config/constants.js';
+import { brokerRequest, resolveTalkHarness } from './cli/request.js';
 import { shouldDefaultToLaunch } from './cli-args.js';
 
-/** How long a single CLI request waits for the broker before giving up. */
-const BROKER_REQUEST_TIMEOUT_MS = 35_000;
-
 /**
- * Sends a JSON-RPC request to the broker and returns the result.
- *
- * The promise always settles: a broker that accepts the connection and then
- * goes away, or never answers, produces an error instead of hanging the CLI.
+ * `--subscription` flag shared by commands that also take `--muse`;
+ * the two pick different credential sources, so they are exclusive.
  */
-async function brokerRequest(method: string, params: Record<string, unknown>): Promise<any> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-
-    const finish = (err: Error | null, result?: unknown) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      if (err) reject(err);
-      else resolve(result);
-    };
-
-    const socket = net.createConnection(SOCKET_PATH, () => {
-      const request = { jsonrpc: '2.0', id: 1, method, params };
-      socket.write(JSON.stringify(request) + '\n');
-    });
-
-    const timer = setTimeout(
-      () => finish(new Error(`Timed out after ${BROKER_REQUEST_TIMEOUT_MS / 1000}s waiting for the broker.`)),
-      BROKER_REQUEST_TIMEOUT_MS
-    );
-
-    let buffer = '';
-    socket.on('data', (data) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      // The final element is either empty or a partial line; keep it buffered.
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const response = JSON.parse(line);
-          if (response.error) finish(new Error(response.error.message));
-          else finish(null, response.result);
-          return;
-        } catch {
-          // Not valid JSON: skip this line and keep reading.
-        }
-      }
-    });
-
-    socket.on('close', () => {
-      finish(new Error('Broker closed the connection before responding.'));
-    });
-
-    socket.on('error', (err) => {
-      finish(new Error(`Cannot connect to broker. Is it running?\n  Start it with: claude-muse talk broker\n  Error: ${err.message}`));
-    });
-  });
+function subscriptionOption(): Option {
+  return new Option('--subscription', 'Use the Muse Code subscription instead of an API key for this run').conflicts(
+    'muse'
+  );
 }
 
 /**
@@ -83,24 +32,29 @@ export function runCli() {
 
   program
     .command('setup')
-    .description('Setup Meta Model API credentials')
+    .description('Setup Muse Code subscription or Meta Model API credentials')
     .action(setupCommand);
 
   program
     .command('models')
     .description('List available models')
     .option('--select', 'Select a model interactively')
+    .option('--muse', 'Use the API key stored in Muse for this run')
+    .addOption(subscriptionOption())
     .action(modelsCommand);
 
   program
     .command('doctor')
     .description('Check system configuration and API connectivity')
+    .option('--subscription', 'Check the Muse Code subscription login for this run')
     .action(doctorCommand);
 
   program
     .command('launch')
     .description('Launch Claude Code with Muse Spark (default)')
     .option('--model <id>', 'Specify model to use')
+    .option('--muse', 'Use the API key stored in Muse for this run')
+    .addOption(subscriptionOption())
     .action(launchCommand);
 
   // ── Talk subcommand group ──
@@ -121,15 +75,11 @@ export function runCli() {
     .command('join')
     .argument('<room>', 'Room name')
     .argument('<name>', 'Your display name')
-    .option('--harness <harness>', "Which CLI you are joining from: 'claude' or 'muse'", 'claude')
+    .option('--harness <harness>', "Which CLI you are joining from: 'claude' or 'muse' (default: $TALK_HARNESS or 'claude')")
     .description('Join a talk room')
-    .action(async (room: string, name: string, options: { harness: string }) => {
+    .action(async (room: string, name: string, options: { harness?: string }) => {
       try {
-        if (options.harness !== 'claude' && options.harness !== 'muse') {
-          console.error(`Unknown harness '${options.harness}'. Expected 'claude' or 'muse'.`);
-          process.exit(1);
-        }
-        const result = await brokerRequest('join', { room, name, harness: options.harness });
+        const result = await brokerRequest('join', { room, name, harness: resolveTalkHarness(options.harness) });
         if (result.waitingForPeer) {
           console.log(`Joined room '${room}' as '${name}'. Waiting for peer...`);
         } else {

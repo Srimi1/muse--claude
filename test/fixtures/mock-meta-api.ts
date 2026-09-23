@@ -12,13 +12,23 @@ export interface MockServerInfo {
   close: () => Promise<void>;
 }
 
-export function startMockMetaServer(): Promise<MockServerInfo> {
+/**
+ * @param options.requiredHeaders Headers every request must carry (else 401),
+ *   simulating an endpoint that needs more than the bearer token.
+ */
+export function startMockMetaServer(
+  options: { requiredHeaders?: Record<string, string> } = {}
+): Promise<MockServerInfo> {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url || '', `http://${req.headers.host}`);
       const auth = req.headers.authorization;
 
-      if (!auth || !auth.startsWith('Bearer ')) {
+      const missingHeader = Object.entries(options.requiredHeaders ?? {}).some(
+        ([name, value]) => req.headers[name.toLowerCase()] !== value
+      );
+
+      if (!auth || !auth.startsWith('Bearer ') || missingHeader) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'Missing or invalid token' } }));
         return;

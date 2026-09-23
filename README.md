@@ -6,7 +6,7 @@ A hybrid coding agent harness that enables **Claude Code** to be driven by **Met
 
 ## Architecture
 
-- **`claude-muse`**: Drop-in launcher wrapping Claude Code with Meta Model API credentials stored securely in macOS Keychain.
+- **`claude-muse`**: Drop-in launcher wrapping Claude Code with Meta credentials: a Meta Model API key stored in macOS Keychain, or (in progress) your existing Muse Code subscription.
 - **`/talk` Broker**: Local Unix-domain socket server with a WASM SQLite message journal (`sql.js`).
 - **6-Stage Collaboration Protocol**:
   1. `PROPOSAL`
@@ -41,6 +41,10 @@ deadline timers and removing its socket.
 ```bash
 claude-muse setup
 ```
+If you're signed in to Muse Code, setup first offers to use your **Muse Code subscription** instead of an API key. Otherwise, if Muse already has a Meta API key (`muse auth set`), setup offers to reuse it, so you don't enter the key twice. For a single run, `--muse` forces Muse's stored API key and `--subscription` forces the subscription (the two can't be combined).
+
+> [!IMPORTANT]
+> Subscription mode is in progress. `setup`, `models --subscription` and `doctor --subscription` accept it today, but `claude-muse launch` on the subscription exits with "not supported yet" until Muse's subscription endpoint is wired up. Keep using an API key to launch for now.
 
 ### 3. Verify Setup
 ```bash

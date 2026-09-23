@@ -30,7 +30,8 @@ export const TALK_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'talk_send',
-    description: 'Send a message to your peer in the /talk room. Max 8 KiB. Exchange has 6 stages: Proposal → Critique → Implementation A → Implementation B → Review → Synthesis.',
+    description:
+      'Send a message to your peer in the /talk room. Max 8 KiB. Exchange has 6 stages: Proposal → Critique → Implementation A → Implementation B → Review → Synthesis.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -47,7 +48,7 @@ export const TALK_TOOLS: McpToolDefinition[] = [
       type: 'object',
       properties: {
         room: { type: 'string', description: 'Room name' },
-        afterSeq: { type: 'string', description: 'Only return messages after this sequence number (optional)' },
+        afterSeq: { type: 'number', description: 'Only return messages after this sequence number (optional)' },
       },
       required: ['room'],
     },

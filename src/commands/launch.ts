@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
-import { readApiKey } from '../config/keychain.js';
 import { loadSettings } from '../config/settings.js';
+import { resolveAuth, describeSource, preferredSource } from '../config/credentials.js';
 import { META_API_BASE_URL } from '../config/constants.js';
 import { MetaClient } from '../api/meta-client.js';
 import { resolveAliases, getContributorWarning } from '../api/model-resolver.js';
@@ -9,19 +9,35 @@ import { resolveAliases, getContributorWarning } from '../api/model-resolver.js'
  * Launch Claude Code with Meta Model API credentials.
  * Credentials are passed exclusively via environment variables.
  *
- * @param options - Launch options with optional model override
+ * @param options - Launch options with optional model override and credential source flags
  */
-export async function launchCommand(options: { model?: string }): Promise<void> {
-  // 1. Read API key from Keychain
-  const apiKey = readApiKey();
-  if (!apiKey) {
-    console.error('Error: Meta Model API key not found in Keychain.');
-    console.error('Please run `claude-muse setup` to configure your credentials.');
+export async function launchCommand(options: {
+  model?: string;
+  muse?: boolean;
+  subscription?: boolean;
+}): Promise<void> {
+  // 1. Load settings and resolve the API credential
+  const settings = loadSettings();
+  const preferred = preferredSource(options, settings.credentialSource);
+  const resolved = resolveAuth(preferred);
+  if (!resolved.token || !resolved.source) {
+    console.error('Error: No Meta API credential found.');
+    console.error('Run `claude-muse setup` to configure one, or store a key in Muse with `muse auth set`.');
     process.exit(1);
   }
+  if (resolved.kind === 'oauth') {
+    // Pending endpoint discovery: the developer Model API rejects the
+    // subscription token, so there is no endpoint to point Claude Code at yet.
+    console.error('Error: Launching on the Muse Code subscription is not supported yet.');
+    console.error('Switch back to an API key with `claude-muse setup`, or pass `--muse`.');
+    process.exit(1);
+  }
+  if (resolved.source === 'muse' || resolved.fellBack) {
+    console.log(`Using Meta API key from ${describeSource(resolved.source)}.`);
+  }
+  const apiKey = resolved.token;
 
-  // 2. Load settings
-  const settings = loadSettings();
+  // 2. Determine model
   let selectedModel = options.model ?? settings.selectedModel;
 
   // 3. Validate model if explicitly specified
@@ -31,7 +47,6 @@ export async function launchCommand(options: { model?: string }): Promise<void> 
     try {
       const availableModels = await client.listModels();
       const modelExists = availableModels.some((m) => m.id === options.model);
-
       if (!modelExists) {
         console.error(`Error: Model '${options.model}' not found.`);
         console.log('Available models:');
@@ -56,7 +71,7 @@ export async function launchCommand(options: { model?: string }): Promise<void> 
   const aliases = resolveAliases(selectedModel, isContributor);
 
   // 5. Build environment — key goes in env vars only, NEVER in args
-  const metaEnv = {
+  const metaEnv: Record<string, string> = {
     ANTHROPIC_BASE_URL: META_API_BASE_URL,
     ANTHROPIC_API_KEY: apiKey,
   };
@@ -73,7 +88,7 @@ export async function launchCommand(options: { model?: string }): Promise<void> 
   });
 
   // 8. Handle child process events
-  child.on('error', (err: any) => {
+  child.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT') {
       console.error('Error: `claude` command not found.');
       console.error('Ensure Claude Code is installed: npm install -g @anthropic-ai/claude-code');
