@@ -25,6 +25,7 @@ export async function launchCommand(options: { model?: string }): Promise<void> 
   let selectedModel = options.model ?? settings.selectedModel;
 
   // 3. Validate model if explicitly specified
+  let isContributor = false;
   if (options.model) {
     const client = new MetaClient(apiKey);
     try {
@@ -41,6 +42,7 @@ export async function launchCommand(options: { model?: string }): Promise<void> 
       // Check if contributor variant
       const matched = availableModels.find((m) => m.id === options.model);
       if (matched?.isContributor) {
+        isContributor = true;
         console.warn(getContributorWarning());
       }
     } catch (err: any) {
@@ -49,8 +51,9 @@ export async function launchCommand(options: { model?: string }): Promise<void> 
     }
   }
 
-  // 4. Resolve model aliases
-  const aliases = resolveAliases(selectedModel);
+  // 4. Resolve model aliases. Pass the contributor flag through so the alias
+  // slots match what `models --select` would have written for the same model.
+  const aliases = resolveAliases(selectedModel, isContributor);
 
   // 5. Build environment — key goes in env vars only, NEVER in args
   const metaEnv = {

@@ -12,7 +12,9 @@
     "test:broker": "vitest run test/broker",
     "test:protocol": "vitest run test/protocol",
     "test:mcp": "vitest run test/mcp",
-    "test:e2e": "vitest run test/e2e"
+    "test:e2e": "vitest run test/e2e",
+    "test:regression": "vitest run test/regression",
+    "test:security": "vitest run test/keychain test/worktree"
   },
   "dependencies": {
     "sql.js": "^1.11.0",

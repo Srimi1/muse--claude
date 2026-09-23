@@ -1,7 +1,7 @@
 import net from 'net';
 import fs from 'fs';
 import path from 'path';
-import { SOCKET_PATH, CONFIG_DIR } from '../config/constants.js';
+import { SOCKET_PATH, CONFIG_DIR, MAX_EXCHANGE_MESSAGES } from '../config/constants.js';
 import { Journal } from './journal.js';
 import { RoomManager } from './room.js';
 import { BrokerError } from './types.js';
@@ -24,6 +24,7 @@ export class BrokerServer {
   private roomManager: RoomManager;
   private clients: Map<net.Socket, { buffer: string; sessionId?: string }> = new Map();
   private socketPath: string;
+  private stopping = false;
 
   constructor(socketPath?: string, dbPath?: string) {
     this.socketPath = socketPath ?? SOCKET_PATH;
@@ -43,6 +44,8 @@ export class BrokerServer {
     }
 
     await this.journal.init();
+    // Rebuild rooms from the journal so a restart does not orphan them.
+    this.roomManager.restore();
 
     this.server = net.createServer((socket) => {
       this.clients.set(socket, { buffer: '' });
@@ -84,16 +87,22 @@ export class BrokerServer {
       });
     });
 
-    process.on('SIGINT', () => this.stop());
-    process.on('SIGTERM', () => this.stop());
   }
 
-  /** Stops the server and cleans up. */
+  /** Stops the server and cleans up. Safe to call more than once. */
   async stop(): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
+
     for (const socket of this.clients.keys()) {
       socket.destroy();
     }
     this.clients.clear();
+
+    // Release the per-room deadline timers. They are 30 minutes long, and
+    // while any of them is pending Node keeps the event loop alive, so the
+    // broker process would ignore Ctrl+C and linger after its socket closed.
+    this.roomManager.shutdown();
 
     if (this.server) {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
@@ -156,7 +165,7 @@ export class BrokerServer {
           this.sendResponse(socket, makeSuccessResponse(request.id, {
             seq: msg.seq,
             stage: msg.stage,
-            remainingMessages: 6 - (this.journal.getMessageCount(p.room)),
+            remainingMessages: MAX_EXCHANGE_MESSAGES - this.journal.getMessageCount(p.room),
           }));
           break;
         }
@@ -167,6 +176,10 @@ export class BrokerServer {
           const start = Date.now();
 
           const poll = () => {
+            // A client that hung up, or a broker that is shutting down, must
+            // not keep rescheduling this timer.
+            if (this.stopping || socket.destroyed) return;
+
             const messages = this.roomManager.receiveMessages(p.room, sessionId!, afterSeq);
             const fromPeer = messages.filter((m) => m.senderId !== sessionId);
             if (fromPeer.length > 0) {
@@ -184,7 +197,7 @@ export class BrokerServer {
               }));
               return;
             }
-            setTimeout(poll, 200);
+            setTimeout(poll, 200).unref();
           };
           poll();
           break;
@@ -251,9 +264,32 @@ export class BrokerServer {
   }
 }
 
-/** Starts and returns a new BrokerServer instance. */
+/**
+ * Starts a broker and wires it to the process lifecycle.
+ *
+ * Signal handling lives here rather than in BrokerServer so that embedding the
+ * server (in tests, or alongside other code) does not register process-wide
+ * listeners, and so shutdown actually terminates the process.
+ */
 export async function startBroker(): Promise<BrokerServer> {
   const server = new BrokerServer();
   await server.start();
+
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\nReceived ${signal}, shutting down broker...`);
+    try {
+      await server.stop();
+    } catch (err: any) {
+      console.error(`Error during shutdown: ${err?.message ?? err}`);
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
   return server;
 }
