@@ -91,6 +91,17 @@ export async function doctorCommand(options: { subscription?: boolean } = {}): P
     } catch (err: any) {
       console.log(`${RED}✗ Streaming test failed: ${err.message}${RESET}`);
     }
+  } else if (client && resolved.kind === 'oauth') {
+    // The subscription token may be accepted for inference even though the
+    // models listing rejects it, so still try the Messages endpoint.
+    console.log(`${RED}✗ Skipping model check (auth failed)${RESET}`);
+    const streamResult = await client.testStreaming();
+    if (streamResult.success) {
+      console.log(`${GREEN}✓ Messages endpoint accepts the subscription token (${streamResult.latencyMs}ms)${RESET}`);
+      passed++;
+    } else {
+      console.log(`${RED}✗ Messages endpoint rejected the subscription token: ${streamResult.error ?? 'unknown error'}${RESET}`);
+    }
   } else {
     console.log(`${RED}✗ Skipping model check (auth failed)${RESET}`);
     console.log(`${RED}✗ Skipping streaming test (auth failed)${RESET}`);

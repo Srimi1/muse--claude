@@ -98,6 +98,12 @@ describe('MetaClient extra headers', () => {
     const client = new MetaClient('token', mockServer.baseUrl);
     expect(await client.testAuth()).toBe(false);
   });
+
+  it('reports why the streaming test failed', async () => {
+    const result = await new MetaClient('token', mockServer.baseUrl).testStreaming();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('401');
+  });
 });
 
 describe('createMetaClient', () => {

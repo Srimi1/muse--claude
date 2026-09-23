@@ -104,7 +104,7 @@ export class MetaClient {
    * Tests streaming latency using the Messages API.
    * @returns A promise resolving to an object indicating success and latency.
    */
-  async testStreaming(): Promise<{ success: boolean; latencyMs: number }> {
+  async testStreaming(): Promise<{ success: boolean; latencyMs: number; error?: string }> {
     const startTime = Date.now();
     try {
       const response = await this.request('/messages', {
@@ -126,8 +126,8 @@ export class MetaClient {
       
       const latencyMs = Date.now() - startTime;
       return { success: true, latencyMs };
-    } catch (error) {
-      return { success: false, latencyMs: -1 };
+    } catch (error: any) {
+      return { success: false, latencyMs: -1, error: error?.message };
     }
   }
 }
