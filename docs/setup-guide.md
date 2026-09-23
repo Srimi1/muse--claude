@@ -132,8 +132,11 @@ claude-muse launch --model muse-spark-1.3
 
 > [!NOTE]
 > With an API key, `claude-muse` launches Claude with:
-> - `ANTHROPIC_BASE_URL=https://api.meta.ai/v1`
-> - `ANTHROPIC_API_KEY=<key retrieved directly from macOS Keychain>`
+> - `ANTHROPIC_BASE_URL=https://api.meta.ai` (Claude Code adds `/v1/messages` itself)
+> - `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` set to the selected Spark model, so background requests don't ask Meta for Claude model names
+> - `ANTHROPIC_AUTH_TOKEN=<key retrieved from Keychain or Muse>`, sent as `Authorization: Bearer`
+>
+> `ANTHROPIC_AUTH_TOKEN` is used rather than `ANTHROPIC_API_KEY` because Claude Code ranks it above a claude.ai login without an approval prompt. With `ANTHROPIC_API_KEY`, a Claude Pro/Max login could be used instead and sent to the Meta endpoint, failing with 401. Any `ANTHROPIC_API_KEY` in your shell is removed for the launched session.
 >
 > `claude-muse launch --subscription` (or a `muse-subscription` config) is not available yet and exits with an error.
 >
