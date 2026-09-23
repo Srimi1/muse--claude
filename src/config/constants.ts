@@ -4,6 +4,15 @@ import os from 'node:os';
 /** Meta API Base URL */
 export const META_API_BASE_URL = 'https://api.meta.ai/v1';
 
+/**
+ * Base URL for requests authenticated with the Muse Code subscription token.
+ * Same as the Model API until Muse's subscription endpoint is confirmed.
+ */
+export const SUBSCRIPTION_API_BASE_URL = META_API_BASE_URL;
+
+/** Extra headers Muse's subscription endpoint expects alongside the bearer token */
+export const SUBSCRIPTION_API_HEADERS: Readonly<Record<string, string>> = {};
+
 /** Default model to use */
 export const DEFAULT_MODEL = 'muse-spark-1.3';
 
@@ -12,6 +21,12 @@ export const KEYCHAIN_SERVICE = 'com.claude-muse.meta-api-key';
 
 /** Keychain account name */
 export const KEYCHAIN_ACCOUNT = 'claude-muse';
+
+/** Muse's own keychain entry holding its API key + subscription token */
+export const MUSE_KEYCHAIN_SERVICE = 'ai.meta.dev.credentials';
+
+/** Muse's keychain account for the meta provider */
+export const MUSE_KEYCHAIN_ACCOUNT = 'meta';
 
 /** Configuration directory path */
 export const CONFIG_DIR = path.join(os.homedir(), '.claude-muse');

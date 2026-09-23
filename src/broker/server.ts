@@ -131,11 +131,17 @@ export class BrokerServer {
 
       switch (request.method) {
         case 'join': {
+          requireNonEmptyString(p.room, 'room');
+          requireNonEmptyString(p.name, 'name');
+          const harness = p.harness ?? 'claude';
+          if (harness !== 'claude' && harness !== 'muse') {
+            throw new Error(`Invalid harness '${harness}': expected 'claude' or 'muse'`);
+          }
           const result = this.roomManager.joinRoom(
             p.room,
             p.sessionId ?? p.name, // sessionId from adapter
             p.name,
-            p.harness ?? 'claude',
+            harness,
             p.repoRoot
           );
           const clientState = this.clients.get(socket);
@@ -151,6 +157,8 @@ export class BrokerServer {
         }
 
         case 'start': {
+          requireNonEmptyString(p.room, 'room');
+          requireNonEmptyString(p.task, 'task');
           this.roomManager.startExchange(p.room, sessionId!, p.task);
           this.sendResponse(socket, makeSuccessResponse(request.id, {
             room: p.room,
@@ -161,6 +169,8 @@ export class BrokerServer {
         }
 
         case 'send': {
+          requireNonEmptyString(p.room, 'room');
+          requireNonEmptyString(p.content, 'content');
           const msg = this.roomManager.sendMessage(p.room, sessionId!, p.content);
           this.sendResponse(socket, makeSuccessResponse(request.id, {
             seq: msg.seq,
@@ -171,6 +181,7 @@ export class BrokerServer {
         }
 
         case 'receive': {
+          requireNonEmptyString(p.room, 'room');
           const timeoutMs = Math.min(p.timeoutMs ?? 30000, 30000);
           const afterSeq = p.afterSeq ?? 0;
           const start = Date.now();
@@ -180,21 +191,32 @@ export class BrokerServer {
             // not keep rescheduling this timer.
             if (this.stopping || socket.destroyed) return;
 
-            const messages = this.roomManager.receiveMessages(p.room, sessionId!, afterSeq);
-            const fromPeer = messages.filter((m) => m.senderId !== sessionId);
-            if (fromPeer.length > 0) {
-              const lastSeq = Math.max(...fromPeer.map((m) => m.seq));
-              this.sendResponse(socket, makeSuccessResponse(request.id, {
-                messages: fromPeer,
-                lastSeq,
-              }));
-              return;
-            }
-            if (Date.now() - start >= timeoutMs) {
-              this.sendResponse(socket, makeSuccessResponse(request.id, {
-                messages: [],
-                lastSeq: afterSeq,
-              }));
+            // Later polls run from a timer, outside handleRequest's try/catch,
+            // so a failure here must be reported rather than thrown.
+            try {
+              const messages = this.roomManager.receiveMessages(p.room, sessionId!, afterSeq);
+              const fromPeer = messages.filter((m) => m.senderId !== sessionId);
+              if (fromPeer.length > 0) {
+                const lastSeq = Math.max(...fromPeer.map((m) => m.seq));
+                this.sendResponse(socket, makeSuccessResponse(request.id, {
+                  messages: fromPeer,
+                  lastSeq,
+                }));
+                return;
+              }
+              if (Date.now() - start >= timeoutMs) {
+                this.sendResponse(socket, makeSuccessResponse(request.id, {
+                  messages: [],
+                  lastSeq: afterSeq,
+                }));
+                return;
+              }
+            } catch (err: any) {
+              this.sendResponse(socket, makeErrorResponse(
+                request.id,
+                BrokerError.INVALID_STATE,
+                err.message || 'Receive failed'
+              ));
               return;
             }
             setTimeout(poll, 200).unref();
@@ -204,18 +226,24 @@ export class BrokerServer {
         }
 
         case 'ack': {
+          requireNonEmptyString(p.room, 'room');
+          if (typeof p.seq !== 'number') {
+            throw new Error(`Invalid param 'seq': expected a number`);
+          }
           this.roomManager.acknowledgeMessage(p.room, sessionId!, p.seq);
           this.sendResponse(socket, makeSuccessResponse(request.id, { acknowledged: true }));
           break;
         }
 
         case 'status': {
+          requireNonEmptyString(p.room, 'room');
           const status = this.roomManager.getStatus(p.room);
           this.sendResponse(socket, makeSuccessResponse(request.id, status));
           break;
         }
 
         case 'stop': {
+          requireNonEmptyString(p.room, 'room');
           this.roomManager.stopRoom(p.room, sessionId!);
           this.sendResponse(socket, makeSuccessResponse(request.id, {
             stopped: true,
@@ -225,6 +253,7 @@ export class BrokerServer {
         }
 
         case 'transcript': {
+          requireNonEmptyString(p.room, 'room');
           const entries = this.roomManager.getTranscript(p.room);
           const summary = this.roomManager.getSummary(p.room);
           this.sendResponse(socket, makeSuccessResponse(request.id, { entries, summary }));
@@ -292,4 +321,14 @@ export async function startBroker(): Promise<BrokerServer> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   return server;
+}
+
+/**
+ * Validates that a required string param is present and non-empty.
+ * @throws Error describing the offending param.
+ */
+function requireNonEmptyString(value: unknown, name: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Invalid param '${name}': expected a non-empty string`);
+  }
 }

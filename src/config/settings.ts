@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { CONFIG_FILE, CONFIG_DIR, DEFAULT_MODEL } from './constants.js';
 import type { ModelAliases } from '../api/model-resolver.js';
+import type { AuthSource } from './credentials.js';
 
 /**
  * User settings interface.
@@ -8,6 +9,8 @@ import type { ModelAliases } from '../api/model-resolver.js';
 export interface Settings {
   selectedModel: string;
   modelAliases: ModelAliases;
+  /** Preferred Meta credential source */
+  credentialSource: AuthSource;
 }
 
 /**
@@ -25,6 +28,28 @@ export function getDefaultSettings(): Settings {
       haiku: DEFAULT_MODEL,
       subagent: DEFAULT_MODEL,
     },
+    credentialSource: 'keychain',
+  };
+}
+
+const AUTH_SOURCES: readonly AuthSource[] = ['keychain', 'muse', 'muse-subscription'];
+
+/**
+ * Merges parsed config JSON over the defaults, discarding an unknown
+ * credential source.
+ *
+ * @param parsed - Parsed contents of the config file
+ * @returns Complete settings object
+ */
+export function normalizeSettings(parsed: any): Settings {
+  const defaults = getDefaultSettings();
+  const credentialSource: AuthSource = AUTH_SOURCES.includes(parsed?.credentialSource)
+    ? parsed.credentialSource
+    : defaults.credentialSource;
+  return {
+    selectedModel: parsed?.selectedModel ?? defaults.selectedModel,
+    modelAliases: { ...defaults.modelAliases, ...parsed?.modelAliases },
+    credentialSource,
   };
 }
 
@@ -38,12 +63,7 @@ export function loadSettings(): Settings {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      const parsed = JSON.parse(data) as Partial<Settings>;
-      const defaults = getDefaultSettings();
-      return {
-        selectedModel: parsed.selectedModel ?? defaults.selectedModel,
-        modelAliases: { ...defaults.modelAliases, ...parsed.modelAliases },
-      };
+      return normalizeSettings(JSON.parse(data));
     }
   } catch {
     console.error('Error reading settings, falling back to defaults.');

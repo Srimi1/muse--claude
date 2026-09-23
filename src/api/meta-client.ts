@@ -1,4 +1,5 @@
-import { META_API_BASE_URL } from '../config/constants.js';
+import { META_API_BASE_URL, SUBSCRIPTION_API_BASE_URL, SUBSCRIPTION_API_HEADERS } from '../config/constants.js';
+import type { ResolvedAuth } from '../config/credentials.js';
 
 /**
  * Represents a Spark model returned from the Meta Model API.
@@ -18,15 +19,18 @@ export interface SparkModel {
 export class MetaClient {
   private apiKey: string;
   private baseUrl: string;
+  private extraHeaders: Record<string, string>;
 
   /**
    * Creates a new MetaClient.
    * @param apiKey The API key for authentication.
    * @param baseUrl Optional custom base URL (default: META_API_BASE_URL)
+   * @param extraHeaders Headers sent with every request besides Authorization
    */
-  constructor(apiKey: string, baseUrl?: string) {
+  constructor(apiKey: string, baseUrl?: string, extraHeaders: Record<string, string> = {}) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl || META_API_BASE_URL;
+    this.extraHeaders = extraHeaders;
   }
 
   /**
@@ -37,6 +41,7 @@ export class MetaClient {
     const headers = {
       'Authorization': `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
+      ...this.extraHeaders,
       ...options.headers,
     };
 
@@ -125,4 +130,19 @@ export class MetaClient {
       return { success: false, latencyMs: -1 };
     }
   }
+}
+
+/**
+ * Creates a MetaClient for a resolved credential, targeting the subscription
+ * endpoint (with its extra headers) for OAuth tokens and the Model API for
+ * API keys.
+ *
+ * @param auth A resolved credential with a non-null token
+ * @param baseUrl Optional override for either kind (used by tests)
+ */
+export function createMetaClient(auth: Pick<ResolvedAuth, 'kind'> & { token: string }, baseUrl?: string): MetaClient {
+  if (auth.kind === 'oauth') {
+    return new MetaClient(auth.token, baseUrl ?? SUBSCRIPTION_API_BASE_URL, { ...SUBSCRIPTION_API_HEADERS });
+  }
+  return new MetaClient(auth.token, baseUrl);
 }

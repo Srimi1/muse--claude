@@ -366,7 +366,7 @@ export class Journal {
     const stmt = this.db.prepare(`
       SELECT m.seq, m.sender_id, m.sender_name, m.stage, m.content, m.timestamp, p.harness
       FROM messages m
-      LEFT JOIN participants p ON m.sender_id = p.session_id
+      LEFT JOIN participants p ON m.sender_id = p.session_id AND m.room_id = p.room_id
       WHERE m.room_id = ?
       ORDER BY m.seq ASC
     `);
